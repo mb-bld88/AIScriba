@@ -95,7 +95,7 @@ Each user can input their own key, or the administrator can manage keys.
 
 If AIScriba helps your business or workflow, consider buying me a coffee to support future development!
 
-[![Donate with PayPal](https://www.paypalobjects.com/en_US/i/btn/btn_donateCC_LG.gif)](https://www.paypal.com/paypalme/YOUR_PAYPAL_USERNAME)
+[![Donate with PayPal](https://www.paypalobjects.com/en_US/i/btn/btn_donateCC_LG.gif)](https://www.paypal.com/paypalme/MattiaBarachetti)
 
 ---
 
