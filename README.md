@@ -100,3 +100,4 @@ If AIScriba helps your business or workflow, consider buying me a coffee to supp
 ---
 
 *Made with ❤️ & AI.*
+"# AIScriba" 
