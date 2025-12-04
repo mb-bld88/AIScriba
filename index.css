@@ -1,0 +1,68 @@
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: 'Inter', sans-serif;
+}
+
+@media print {
+  @page {
+    margin: 10mm;
+    size: A4;
+  }
+
+  html, body {
+    height: auto !important;
+    overflow: visible !important;
+    background-color: white !important;
+    color: black !important;
+  }
+
+  /* Hide Application Shell - Explicitly hide main layout components */
+  .layout-sidebar, 
+  .layout-header,
+  .layout-meeting-list,
+  .no-print,
+  button,
+  audio,
+  details > summary {
+    display: none !important;
+  }
+
+  /* Reset Layout Containers for Full Page Print */
+  #root, 
+  .layout-root, 
+  .layout-main, 
+  .layout-content-wrapper, 
+  .layout-meeting-details {
+    width: 100% !important;
+    height: auto !important;
+    min-height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    position: relative !important;
+    overflow: visible !important;
+    display: block !important;
+    flex: none !important;
+    transform: none !important;
+  }
+
+  /* Text Readability */
+  p, li, td, h1, h2, h3, h4 {
+    color: black !important;
+    page-break-inside: auto;
+  }
+  
+  /* Reset container styles */
+  .bg-white, .dark\:bg-slate-800, .shadow-sm, .rounded-xl {
+      background: white !important;
+      box-shadow: none !important;
+      border: none !important;
+      border-radius: 0 !important;
+  }
+
+  /* Force expanded details */
+  details[open] { display: block !important; }
+}

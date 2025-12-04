@@ -1,0 +1,26 @@
+
+FROM node:20-alpine
+
+# Install OpenSSL (required for Prisma on Alpine Linux)
+RUN apk add --no-cache openssl
+
+WORKDIR /app
+
+COPY package.json ./
+RUN npm install
+
+COPY . .
+
+# Generate Prisma Client based on the schema
+RUN npx prisma generate
+
+# Build the TypeScript project
+RUN npm run build
+
+EXPOSE 3001
+
+# Start command:
+# 1. Update DB schema (prisma db push)
+# 2. Seed initial data (npm run seed)
+# 3. Start the compiled server (node dist/index.js)
+CMD ["sh", "-c", "npx prisma db push && npm run seed && node dist/index.js"]

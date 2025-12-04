@@ -1,0 +1,40 @@
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: aiscriba_db
+    restart: always
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password_sicura
+      POSTGRES_DB: aiscriba
+    volumes:
+      - aiscriba_pg_data:/var/lib/postgresql/data
+
+  backend:
+    container_name: aiscriba_backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "3005:3001"
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: postgresql://admin:password_sicura@db:5432/aiscriba?schema=public
+      JWT_SECRET: super_secret_key_change_me
+      PORT: 3001
+
+  frontend:
+    container_name: aiscriba_frontend
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "3006:3006"
+    depends_on:
+      - backend
+
+volumes:
+  aiscriba_pg_data:
