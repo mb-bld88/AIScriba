@@ -1,0 +1,7 @@
+{
+  "name": "AIScriba - Intelligent Meeting Minutes",
+  "description": "A platform to automatically record, transcribe, and summarize meetings, turning conversations into structured strategic documentation using AI.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
