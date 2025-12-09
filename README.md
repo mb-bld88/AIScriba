@@ -67,8 +67,8 @@ Access the app at: `http://localhost:3006`
 AIScriba is an open-source project requiring continuous maintenance.
 If this software helps your business, please consider supporting development.
 
-[![Donate](https://img.shields.io/badge/Donate-PayPal-blue.svg)](https://paypal.me/your_link_here)
-[![GitHub Stars](https://img.shields.io/github/stars/your_username/aiscriba?style=social)](https://github.com/your_username/aiscriba)
+[![Donate](https://img.shields.io/badge/Donate-PayPal-blue.svg)](https://paypal.me/MattiaBarachetti)
+[![GitHub Stars](https://img.shields.io/github/stars/mb-bld88/aiscriba?style=social)](https://github.com/mb-bld88/AIScriba)
 
 ---
 
