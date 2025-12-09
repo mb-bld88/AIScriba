@@ -1,0 +1,76 @@
+
+generator client {
+  provider = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                      String  @id @default(uuid())
+  email                   String  @unique
+  password                String
+  role                    String
+  
+  companyId               String?
+  company                 Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  meetings                Meeting[] @relation("MeetingCreator")
+  sharedMeetings          Meeting[] @relation("SharedMeetings") // Relation for meetings shared WITH this user
+  passwordResets          PasswordReset[]
+
+  googleApiKey            String?
+  monthlyAllowanceSeconds Int     @default(252000)
+  usedSecondsThisMonth    Int     @default(0)
+}
+
+model Company {
+  id      String  @id @default(uuid())
+  name    String
+  logoUrl String?
+  
+  users    User[]
+  meetings Meeting[]
+}
+
+model Meeting {
+  id           String   @id
+  title        String
+  date         String
+  participants String
+  verbal       String?
+  audioUrl     String?
+  status       String
+  
+  companyId    String
+  company      Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  creatorId    String
+  creator      User     @relation("MeetingCreator", fields: [creatorId], references: [id], onDelete: Cascade)
+  
+  sharedWith   User[]   @relation("SharedMeetings") // Relation for users this meeting is shared WITH
+  
+  visibility   String   @default("private")
+  createdAt    DateTime @default(now())
+}
+
+model GlobalSettings {
+  id          String @id @default("settings")
+  smtpHost    String?
+  smtpPort    Int?
+  smtpUser    String?
+  smtpPass    String?
+  smtpFrom    String?
+  appBaseUrl  String?
+}
+
+model PasswordReset {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+}
