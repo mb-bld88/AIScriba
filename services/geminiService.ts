@@ -4,7 +4,6 @@ import type { Verbal } from '../types';
 
 // --- SCHEMAS ---
 
-// 1. Base components for Structured Flowchart
 const flowchartNodesSchema = {
     type: Type.ARRAY,
     items: {
@@ -31,7 +30,6 @@ const flowchartEdgesSchema = {
     }
 };
 
-// 2. Full Structured Schema for Generation (Internal use)
 const verbalGenerationSchema = {
   type: Type.OBJECT,
   properties: {
@@ -52,7 +50,6 @@ const verbalGenerationSchema = {
   required: ["executiveSummary", "decisions", "actionItems", "discussionSummary", "flowchartData"]
 };
 
-// 3. Simple Schema for standalone flowchart generation
 const flowchartStructuredSchema = {
     type: Type.OBJECT,
     properties: {
@@ -99,10 +96,6 @@ const prompts: Record<string, any> = {
   },
 };
 
-['fr', 'de', 'es', 'zh', 'ar', 'pt', 'el', 'hi'].forEach(lang => {
-    prompts[lang] = prompts['en'];
-});
-
 const getPrompts = (lang: string) => prompts[lang] || prompts['en'];
 
 const fileToGenerativePart = (file: Blob): Promise<{inlineData: { data: string; mimeType: string; }}> => {
@@ -121,11 +114,8 @@ const fileToGenerativePart = (file: Blob): Promise<{inlineData: { data: string; 
 
 const getAiClient = (apiKey: string) => new GoogleGenAI({ apiKey });
 
-// --- HELPERS ---
-
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Increased default retries to 10 to handle 503 Overloaded better
 async function retryOperation<T>(operation: () => Promise<T>, retries = 10, baseDelay = 2000): Promise<T> {
     let lastError: any;
     for (let i = 0; i < retries; i++) {
@@ -134,11 +124,9 @@ async function retryOperation<T>(operation: () => Promise<T>, retries = 10, base
         } catch (error: any) {
             lastError = error;
             const msg = (error.message || JSON.stringify(error)).toLowerCase();
-            
-            // Retry on 503 (Overloaded) or 429 (Rate Limit)
             if (msg.includes('503') || msg.includes('overloaded') || msg.includes('429') || msg.includes('resource exhausted')) {
-                const waitTime = baseDelay * Math.pow(1.5, i); // Exponential backoff
-                console.warn(`Gemini API Busy/RateLimited (Attempt ${i+1}/${retries}). Waiting ${Math.round(waitTime/1000)}s...`);
+                const waitTime = baseDelay * Math.pow(1.5, i);
+                console.warn(`Gemini API Busy (Attempt ${i+1}/${retries}). Waiting ${Math.round(waitTime/1000)}s...`);
                 await delay(waitTime); 
                 continue;
             }
@@ -150,7 +138,6 @@ async function retryOperation<T>(operation: () => Promise<T>, retries = 10, base
 
 const convertStructuredDataToMermaid = (data: any): string => {
     if (!data || !data.nodes) return "";
-    
     let mermaidCode = "graph TD\n";
     if (Array.isArray(data.nodes)) {
         data.nodes.forEach((node: any) => {
@@ -180,19 +167,17 @@ const convertStructuredDataToMermaid = (data: any): string => {
     return mermaidCode;
 };
 
-// --- CHUNKING LOGIC ---
 const MAX_CHUNK_SIZE_MB = 18; 
 const MAX_CHUNK_SIZE_BYTES = MAX_CHUNK_SIZE_MB * 1024 * 1024;
 
 async function transcribeChunk(ai: GoogleGenAI, audioBlob: Blob, lang: string): Promise<string> {
     const audioPart = await fileToGenerativePart(audioBlob);
     const p = getPrompts(lang);
-    
     return retryOperation(async () => {
         const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: { parts: [ { text: p.transcribeOnly || prompts['en'].transcribeOnly }, audioPart ] },
-        }) as GenerateContentResponse;
+            model: "gemini-3-flash-preview",
+            contents: { parts: [ { text: p.transcribeOnly }, audioPart ] },
+        });
         return response.text || "";
     });
 }
@@ -203,38 +188,31 @@ export const generateMinutesFromAudio = async (audioBlob: Blob, participants: st
   const ai = getAiClient(apiKey);
   const p = getPrompts(language);
 
-  // 1. Direct generation for small files
   if (audioBlob.size < MAX_CHUNK_SIZE_BYTES) {
-      console.log("Audio small, using direct generation.");
       const prompt = p.generate(participants);
       const audioPart = await fileToGenerativePart(audioBlob);
 
       const response = await retryOperation(async () => {
-          const res = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
+          return await ai.models.generateContent({
+            model: "gemini-3-flash-preview",
             contents: { parts: [ { text: prompt }, audioPart ] },
             config: { responseMimeType: "application/json", responseSchema: verbalGenerationSchema },
           });
-          return res as GenerateContentResponse;
       });
 
       const jsonText = cleanJson(response.text || "");
       if (!jsonText) throw new Error("Risposta vuota dall'IA");
-      
       const rawData = JSON.parse(jsonText);
-      const mermaidString = convertStructuredDataToMermaid(rawData.flowchartData);
-      
       return {
           executiveSummary: rawData.executiveSummary,
           decisions: rawData.decisions,
           actionItems: rawData.actionItems,
           discussionSummary: rawData.discussionSummary,
           fullTranscript: rawData.fullTranscript || "",
-          flowchart: mermaidString
+          flowchart: convertStructuredDataToMermaid(rawData.flowchartData)
       };
   }
 
-  // 2. Chunking strategy
   const chunks: Blob[] = [];
   let start = 0;
   while (start < audioBlob.size) {
@@ -245,115 +223,67 @@ export const generateMinutesFromAudio = async (audioBlob: Blob, participants: st
 
   let fullTranscript = "";
   for (let i = 0; i < chunks.length; i++) {
-      try {
-          // Add delay between chunks to avoid 429 Resource Exhausted (RPM limit)
-          if (i > 0) {
-              console.log("Pausing 2s between chunks to respect rate limits...");
-              await delay(2000); 
-          }
-          
-          const chunkText = await transcribeChunk(ai, chunks[i], language);
-          fullTranscript += chunkText + "\n";
-      } catch (e) {
-          fullTranscript += `[Error transcribing part ${i + 1}]\n`;
-      }
+      if (i > 0) await delay(2000); 
+      fullTranscript += await transcribeChunk(ai, chunks[i], language) + "\n";
   }
 
-  // Final Summary
-  const analysisPrompt = p.analyzeText ? p.analyzeText(participants) : prompts['en'].analyzeText(participants);
-  
+  const analysisPrompt = p.analyzeText(participants);
   const response = await retryOperation(async () => {
-      const res = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+      return await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
         contents: { parts: [ { text: analysisPrompt }, { text: fullTranscript } ] },
         config: { responseMimeType: "application/json", responseSchema: verbalGenerationSchema },
       });
-      return res as GenerateContentResponse;
   });
 
   const jsonText = cleanJson(response.text || "");
   const rawData = JSON.parse(jsonText);
-  const mermaidString = convertStructuredDataToMermaid(rawData.flowchartData);
-
   return {
       executiveSummary: rawData.executiveSummary,
       decisions: rawData.decisions,
       actionItems: rawData.actionItems,
       discussionSummary: rawData.discussionSummary,
       fullTranscript: fullTranscript,
-      flowchart: mermaidString
+      flowchart: convertStructuredDataToMermaid(rawData.flowchartData)
   };
 };
 
 export const refineMinutes = async (currentVerbal: Verbal, refinementPrompt: string, language: string, apiKey: string): Promise<Verbal> => {
-    try {
-        const ai = getAiClient(apiKey);
-        const { fullTranscript, ...summary } = currentVerbal;
-        
-        const promptGenerator = getPrompts(language).refine || prompts['en'].refine;
-        const prompt = promptGenerator(summary, refinementPrompt);
+    const ai = getAiClient(apiKey);
+    const { fullTranscript, ...summary } = currentVerbal;
+    const prompt = getPrompts(language).refine(summary, refinementPrompt);
 
-        const response = await retryOperation(async () => {
-            const res = await ai.models.generateContent({
-                model: "gemini-2.5-flash",
-                contents: prompt,
-                config: {
-                    responseMimeType: "application/json",
-                    responseSchema: verbalGenerationSchema, 
-                },
-            });
-            return res as GenerateContentResponse;
+    const response = await retryOperation(async () => {
+        return await ai.models.generateContent({
+            model: "gemini-3-flash-preview",
+            contents: prompt,
+            config: { responseMimeType: "application/json", responseSchema: verbalGenerationSchema },
         });
-        
-        const jsonText = cleanJson(response.text || "");
-        const rawData = JSON.parse(jsonText);
-        const mermaidString = convertStructuredDataToMermaid(rawData.flowchartData);
-        
-        return { 
-            executiveSummary: rawData.executiveSummary,
-            decisions: rawData.decisions,
-            actionItems: rawData.actionItems,
-            discussionSummary: rawData.discussionSummary,
-            fullTranscript: fullTranscript,
-            flowchart: mermaidString
-        };
-
-    } catch (error: any) {
-        console.error("Refinement error:", error);
-        throw new Error("Impossibile affinare il verbale.");
-    }
+    });
+    
+    const jsonText = cleanJson(response.text || "");
+    const rawData = JSON.parse(jsonText);
+    return { 
+        executiveSummary: rawData.executiveSummary,
+        decisions: rawData.decisions,
+        actionItems: rawData.actionItems,
+        discussionSummary: rawData.discussionSummary,
+        fullTranscript: fullTranscript,
+        flowchart: convertStructuredDataToMermaid(rawData.flowchartData)
+    };
 };
 
 export const generateFlowchartFromText = async (transcript: string, language: string, apiKey: string): Promise<string> => {
-    try {
-        const ai = getAiClient(apiKey);
-        const prompt = `
-          Extract process flow from text.
-          Return 'nodes' and 'edges' in JSON.
-          Target Language for labels: ${language}
-        `;
-
-        const response = await retryOperation(async () => {
-            const res = await ai.models.generateContent({
-                model: "gemini-2.5-flash",
-                contents: { parts: [{ text: prompt }, { text: transcript }] },
-                config: {
-                    responseMimeType: "application/json",
-                    responseSchema: flowchartStructuredSchema, 
-                },
-            });
-            return res as GenerateContentResponse;
+    const ai = getAiClient(apiKey);
+    const prompt = `Extract process flow from text. Return 'nodes' and 'edges' in JSON. Target Language: ${language}`;
+    const response = await retryOperation(async () => {
+        return await ai.models.generateContent({
+            model: "gemini-3-flash-preview",
+            contents: { parts: [{ text: prompt }, { text: transcript }] },
+            config: { responseMimeType: "application/json", responseSchema: flowchartStructuredSchema },
         });
-
-        const jsonText = cleanJson(response.text || "");
-        if (!jsonText) throw new Error("Empty response");
-        
-        const data = JSON.parse(jsonText);
-        return convertStructuredDataToMermaid(data);
-        
-    } catch (e: any) {
-        console.error("Flowchart generation failed", e);
-        if (e.message.includes("API Key")) throw e;
-        throw new Error("Failed to generate flowchart");
-    }
+    });
+    const jsonText = cleanJson(response.text || "");
+    const data = JSON.parse(jsonText);
+    return convertStructuredDataToMermaid(data);
 };
