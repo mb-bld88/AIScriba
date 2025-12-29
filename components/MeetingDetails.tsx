@@ -69,6 +69,7 @@ export const MeetingDetails: React.FC<MeetingDetailsProps> = ({ meeting, onUpdat
     const [refinementPrompt, setRefinementPrompt] = useState('');
     const [isRefining, setIsRefining] = useState(false);
     const [isGeneratingFlowchart, setIsGeneratingFlowchart] = useState(false);
+    const [flowchartError, setFlowchartError] = useState(false); // New state for error handling
     const [error, setError] = useState<string | null>(null);
     const { t, language } = useLanguage();
     
@@ -99,41 +100,57 @@ export const MeetingDetails: React.FC<MeetingDetailsProps> = ({ meeting, onUpdat
         return () => document.removeEventListener("mousedown", handleClickOutside);
     }, []);
 
-    const sanitizeMermaidCode = (code: string) => {
-        let clean = code.replace(/```mermaid/g, '').replace(/```/g, '').replace(/^mermaid\s+/g, '').trim();
-        clean = clean.replace(/\[(.*?)\]/g, (match, content) => {
-            const safeContent = content.replace(/[^a-zA-Z0-9\sàèéìòùÀÈÉÌÒÙ]/g, ' '); 
-            return `[${safeContent.trim()}]`;
-        });
-        clean = clean.replace(/[:"]/g, '');
-        return clean;
-    };
+    // Reset error when meeting changes
+    useEffect(() => {
+        setFlowchartError(false);
+    }, [meeting.id, meeting.verbal?.flowchart]);
 
     useEffect(() => {
-        if (meeting.verbal?.flowchart) {
+        if (meeting.verbal?.flowchart && !flowchartError) {
             const mermaidChartId = `mermaid-chart-${meeting.id}`;
             const element = document.getElementById(mermaidChartId);
 
             if (element) {
+                // Clear previous content
                 element.innerHTML = `<div class="flex justify-center items-center min-h-[100px]"><div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div></div>`;
+                
                 const isDarkMode = document.documentElement.classList.contains('dark');
-                const cleanFlowchart = sanitizeMermaidCode(meeting.verbal.flowchart);
+                let code = meeting.verbal.flowchart;
+                
+                // Minimal Sanitization (The heavy lifting is now done by the backend structure)
+                // Just ensuring graph TD exists if missing
+                if (!code.includes('graph TD') && !code.includes('graph LR')) {
+                     code = 'graph TD\n' + code;
+                }
 
                 try {
-                    mermaid.initialize({ startOnLoad: false, theme: isDarkMode ? 'dark' : 'default', securityLevel: 'loose', suppressErrorRendering: true });
-                    mermaid.render(`mermaid-svg-${meeting.id}`, cleanFlowchart)
-                        .then(({ svg }: { svg: string }) => { if (element) element.innerHTML = svg; })
+                    mermaid.initialize({ 
+                        startOnLoad: false, 
+                        theme: isDarkMode ? 'dark' : 'default', 
+                        securityLevel: 'loose',
+                        fontFamily: 'inherit'
+                    });
+                    
+                    mermaid.render(`mermaid-svg-${meeting.id}`, code)
+                        .then(({ svg }: { svg: string }) => { 
+                            if (element) element.innerHTML = svg; 
+                        })
                         .catch((e: any) => {
-                            if (element) element.innerHTML = `<div class="p-4 bg-red-50 text-red-600 rounded text-sm border border-red-200">Errore grafico. Codice non valido.</div>`;
+                            console.error("Mermaid Render Error:", e);
+                            setFlowchartError(true); // Trigger UI switch to regeneration button
                         });
-                } catch(e) { if (element) element.innerHTML = `<p class="text-slate-500 text-sm">Grafico non disponibile.</p>`; }
+                } catch(e: any) { 
+                     console.error("Mermaid Init Error:", e);
+                     setFlowchartError(true);
+                }
             }
         }
-    }, [meeting.verbal?.flowchart, meeting.id]);
+    }, [meeting.verbal?.flowchart, meeting.id, flowchartError]);
 
     const handleGenerateFlowchart = async () => {
         if (!meeting.verbal) return;
         setIsGeneratingFlowchart(true);
+        setFlowchartError(false); // Reset error state while generating
         try {
             const flowchartCode = await generateFlowchartFromText(meeting.verbal.fullTranscript, language, currentUser.googleApiKey || '');
             const updatedVerbal = { ...meeting.verbal, flowchart: flowchartCode };
@@ -259,23 +276,89 @@ ${verbal.fullTranscript}
                 <h2 className="text-2xl font-bold text-red-700 dark:text-red-400">
                     Elaborazione Fallita
                 </h2>
-                <div className="flex space-x-4 mt-8">
-                    <button onClick={handleDelete} className="px-6 py-2 bg-slate-200 text-slate-700 rounded-lg">Elimina</button>
-                    {onRetry && (
-                        <button onClick={() => onRetry(meeting)} className="px-6 py-2 bg-red-600 text-white rounded-lg">Riprova</button>
+                <p className="text-slate-600 dark:text-slate-300 mb-6 max-w-md">
+                    Si è verificato un errore durante l'elaborazione dell'audio. Spesso questo accade perché si è raggiunta la <strong>Quota Giornaliera</strong> o i server Google sono intasati.
+                </p>
+                <div className="flex space-x-4">
+                     {meeting.audioUrl && (
+                        <a 
+                            href={meeting.audioUrl} 
+                            download={`backup-${meeting.title}.webm`}
+                            className="px-6 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg font-bold flex items-center"
+                        >
+                            <i className="fa-solid fa-download mr-2"></i> Scarica Audio
+                        </a>
                     )}
+                    {onRetry && (
+                        <button onClick={() => onRetry(meeting)} className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg flex items-center">
+                            <i className="fa-solid fa-rotate-right mr-2"></i> Riprova
+                        </button>
+                    )}
+                    <button onClick={handleDelete} className="px-6 py-2 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg font-bold">
+                        Elimina
+                    </button>
                 </div>
             </div>
         );
     }
 
     if (meeting.status === 'processing' || meeting.status === 'pending') {
+        let isStuck = false;
+        try {
+            const timestamp = parseInt(meeting.id.split('-')[1]);
+            const elapsed = Date.now() - timestamp;
+            if (elapsed > 5 * 60 * 1000) { 
+                isStuck = true;
+            }
+        } catch(e) {}
+
         return (
             <div className="flex flex-col items-center justify-center h-full text-center p-8 bg-white dark:bg-slate-800 rounded-lg">
-                <Spinner className="h-12 w-12 border-b-4 border-blue-500 mb-4" />
-                <p>{t('processing')}...</p>
-                <div className="mt-12 pt-6 border-t border-slate-200 dark:border-slate-700 w-full max-w-md">
-                    <button onClick={handleDelete} className="text-red-500 hover:text-red-700 text-sm font-semibold hover:underline">
+                <div className="relative mb-6">
+                    <Spinner className="h-16 w-16 border-b-4 border-blue-500" />
+                    {isStuck && (
+                        <div className="absolute -top-1 -right-1 bg-amber-500 rounded-full w-6 h-6 flex items-center justify-center text-white text-xs font-bold animate-ping">
+                            !
+                        </div>
+                    )}
+                </div>
+                
+                <h3 className="text-xl font-bold mb-2">{t('processing')}...</h3>
+                <p className="text-slate-500 max-w-md mb-8">
+                    {t('processingMessage')}
+                </p>
+
+                {isStuck && (
+                    <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-4 rounded-lg mb-6 max-w-md">
+                        <p className="text-amber-800 dark:text-amber-200 font-semibold mb-2">
+                            <i className="fa-solid fa-clock mr-2"></i> Sembra che ci stia mettendo un po' troppo...
+                        </p>
+                        <p className="text-sm text-amber-700 dark:text-amber-300 mb-4">
+                            Se hai ricaricato la pagina o chiuso il browser durante l'elaborazione, il processo potrebbe essersi interrotto.
+                        </p>
+                        {onRetry && (
+                            <button 
+                                onClick={() => onRetry(meeting)}
+                                className="bg-amber-600 hover:bg-amber-700 text-white font-bold py-2 px-4 rounded-lg w-full transition-colors"
+                            >
+                                <i className="fa-solid fa-rotate-right mr-2"></i> Riprova Sintesi
+                            </button>
+                        )}
+                    </div>
+                )}
+
+                <div className="flex space-x-4">
+                    {meeting.audioUrl && (
+                        <a 
+                            href={meeting.audioUrl} 
+                            download={`backup-${meeting.title}.webm`}
+                            className="text-blue-600 hover:text-blue-800 dark:text-blue-400 font-semibold text-sm flex items-center bg-blue-50 dark:bg-blue-900/30 px-4 py-2 rounded-lg"
+                        >
+                            <i className="fa-solid fa-download mr-2"></i> Salvataggio Audio (Safety Net)
+                        </a>
+                    )}
+                    
+                    <button onClick={handleDelete} className="text-red-500 hover:text-red-700 text-sm font-semibold hover:underline px-4 py-2">
                         <i className="fa-solid fa-trash-can mr-1"></i> Annulla ed Elimina
                     </button>
                 </div>
@@ -300,9 +383,17 @@ ${verbal.fullTranscript}
                     )}
                 </div>
                 <div className="flex items-center space-x-2">
-                     <button onClick={handleDelete} className="bg-red-100 hover:bg-red-200 text-red-700 p-2 rounded-lg"><i className="fa-solid fa-trash-can"></i></button>
+                     <button onClick={handleDelete} className="bg-red-100 hover:bg-red-200 text-red-700 p-2 rounded-lg" title="Elimina Riunione"><i className="fa-solid fa-trash-can"></i></button>
                      
-                     {/* Share Button with Modal Trigger */}
+                     {/* RESTORED ZIP BUTTON */}
+                     <button 
+                        onClick={handleExportZip}
+                        className="bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-200 font-bold py-2 px-4 rounded-lg transition-colors flex items-center"
+                        title="Scarica ZIP con Audio e Verbale"
+                     >
+                        <i className="fa-solid fa-file-zipper mr-2"></i> ZIP
+                     </button>
+
                      <button 
                         onClick={() => setShowShareModal(true)}
                         className="flex items-center bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-200 font-bold py-2 px-4 rounded-lg transition-colors"
@@ -435,13 +526,22 @@ ${verbal.fullTranscript}
                             <h3 className="text-xl font-bold uppercase">{t('flowchart')}</h3>
                         </div>
                     </div>
-                    {verbal.flowchart ? (
+                    
+                    {/* Flowchart Logic: Either Show Chart, Error/Regenerate UI, or Initial Generate UI */}
+                    {verbal.flowchart && !flowchartError ? (
                         <div id={`mermaid-chart-${meeting.id}`} className="flex justify-center items-center"></div>
                     ) : (
-                        <div className="text-center py-8 no-print">
-                            <p className="text-slate-500 mb-4">Nessun grafico generato.</p>
-                            <button onClick={handleGenerateFlowchart} disabled={isGeneratingFlowchart} className="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700 disabled:opacity-50">
-                                {isGeneratingFlowchart ? <Spinner /> : "Genera Diagramma di Flusso Ora"}
+                        <div className="text-center py-8 no-print bg-slate-50 dark:bg-slate-900/50 rounded-lg">
+                            {flowchartError && (
+                                <div className="mb-4 text-red-500 flex flex-col items-center">
+                                    <i className="fa-solid fa-triangle-exclamation text-2xl mb-2"></i>
+                                    <p className="font-semibold">Il grafico salvato non è valido.</p>
+                                    <p className="text-xs text-slate-500">I dati generati in precedenza non sono compatibili. Puoi rigenerarlo ora.</p>
+                                </div>
+                            )}
+                            <p className="text-slate-500 mb-4">{!flowchartError ? "Nessun grafico generato." : ""}</p>
+                            <button onClick={handleGenerateFlowchart} disabled={isGeneratingFlowchart} className="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700 disabled:opacity-50 font-bold shadow-md transition-all hover:scale-105">
+                                {isGeneratingFlowchart ? <span className="flex items-center"><Spinner className="mr-2 h-4 w-4 border-white"/> Rigenerazione in corso...</span> : "Genera / Ripara Diagramma"}
                             </button>
                         </div>
                     )}

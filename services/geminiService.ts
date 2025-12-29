@@ -1,114 +1,107 @@
 
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import type { Verbal } from '../types';
 
-const verbalSummarySchema = {
+// --- SCHEMAS ---
+
+// 1. Base components for Structured Flowchart
+const flowchartNodesSchema = {
+    type: Type.ARRAY,
+    items: {
+        type: Type.OBJECT,
+        properties: {
+            id: { type: Type.STRING, description: "Unique alphanumeric ID (e.g., A, B, C). No spaces." },
+            label: { type: Type.STRING, description: "Text label. No double quotes." },
+            type: { type: Type.STRING, description: "'process' or 'decision'" }
+        },
+        required: ["id", "label", "type"]
+    }
+};
+
+const flowchartEdgesSchema = {
+    type: Type.ARRAY,
+    items: {
+        type: Type.OBJECT,
+        properties: {
+            fromId: { type: Type.STRING },
+            toId: { type: Type.STRING },
+            label: { type: Type.STRING, description: "Optional label (e.g. Yes, No)" }
+        },
+        required: ["fromId", "toId"]
+    }
+};
+
+// 2. Full Structured Schema for Generation (Internal use)
+const verbalGenerationSchema = {
   type: Type.OBJECT,
   properties: {
     executiveSummary: { type: Type.STRING },
     decisions: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { decision: { type: Type.STRING } } } },
     actionItems: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { task: { type: Type.STRING }, owner: { type: Type.STRING }, dueDate: { type: Type.STRING } } } },
     discussionSummary: { type: Type.STRING },
-    flowchart: { type: Type.STRING },
-  },
-  required: ["executiveSummary", "decisions", "actionItems", "discussionSummary", "flowchart"]
-};
-
-const verbalSchema = {
-    ...verbalSummarySchema,
-    properties: {
-        fullTranscript: { type: Type.STRING },
-        ...verbalSummarySchema.properties,
+    flowchartData: { 
+        type: Type.OBJECT,
+        properties: {
+            nodes: flowchartNodesSchema,
+            edges: flowchartEdgesSchema
+        },
+        required: ["nodes", "edges"]
     },
-    required: ["fullTranscript", ...verbalSummarySchema.required],
+    fullTranscript: { type: Type.STRING } 
+  },
+  required: ["executiveSummary", "decisions", "actionItems", "discussionSummary", "flowchartData"]
 };
 
-const flowchartSchema = {
+// 3. Simple Schema for standalone flowchart generation
+const flowchartStructuredSchema = {
     type: Type.OBJECT,
     properties: {
-        flowchart: { type: Type.STRING }
+        nodes: flowchartNodesSchema,
+        edges: flowchartEdgesSchema
     },
-    required: ["flowchart"]
+    required: ["nodes", "edges"]
 };
+
+// --- PROMPTS ---
 
 const prompts: Record<string, any> = {
   en: {
     generate: (participants: string[]) => `
-      You are AIScriba. Transcribe audio to 'fullTranscript' and generate structured summary.
+      You are AIScriba. Transcribe audio to 'fullTranscript'.
+      Generate structured summary.
+      For 'flowchartData', extract the process flow into 'nodes' and 'edges' arrays.
       Participants: ${participants.join(', ')}. Language: ENGLISH.
-      Flowchart: Simple labels, NO special chars. Output valid JSON.
     `,
     analyzeText: (participants: string[]) => `
-      You are AIScriba. Analyze this TRANSCRIPT. Generate structured summary and flowchart.
+      You are AIScriba. Analyze TRANSCRIPT.
+      Generate structured summary.
+      For 'flowchartData', extract process flow into 'nodes' and 'edges'.
       Participants: ${participants.join(', ')}. Language: ENGLISH.
-      Flowchart: Simple labels, NO special chars. Output valid JSON (exclude fullTranscript).
     `,
-    transcribeOnly: "Transcribe audio word-for-word. Output ONLY raw text. No markdown.",
-    refine: (currentVerbal: any, refinementPrompt: string) => `Edit JSON. Context: ${JSON.stringify(currentVerbal)}. Request: "${refinementPrompt}". Output valid JSON.`
+    transcribeOnly: "Transcribe audio word-for-word. Output ONLY raw text.",
+    refine: (c:any, r:string) => `Edit JSON. Context: ${JSON.stringify(c)}. Request: "${r}". Output valid JSON with flowchartData.`
   },
   it: {
     generate: (participants: string[]) => `
-      Sei AIScriba. Trascrivi audio in 'fullTranscript' e genera riassunto.
+      Sei AIScriba. Trascrivi in 'fullTranscript'.
+      Genera riassunto strutturato.
+      Per 'flowchartData', estrai il flusso in array 'nodes' e 'edges'.
       Partecipanti: ${participants.join(', ')}. Lingua: ITALIANO.
-      Flowchart: Etichette SEMPLICI. NO simboli speciali. Output JSON.
     `,
     analyzeText: (participants: string[]) => `
-      Sei AIScriba. Analizza questo TESTO TRASCRITTO. Genera riassunto e diagramma di flusso.
+      Sei AIScriba. Analizza TRASCRIZIONE.
+      Genera riassunto.
+      Per 'flowchartData', estrai il flusso in 'nodes' e 'edges'.
       Partecipanti: ${participants.join(', ')}. Lingua: ITALIANO.
-      Flowchart: Etichette SEMPLICI. NO simboli speciali. Output JSON (senza fullTranscript).
     `,
-    transcribeOnly: "Trascrivi questo audio parola per parola. Restituisci SOLO il testo grezzo. Niente markdown.",
-    refine: (currentVerbal: any, refinementPrompt: string) => `Modifica JSON. Contesto: ${JSON.stringify(currentVerbal)}. Richiesta: "${refinementPrompt}". Output JSON.`
+    transcribeOnly: "Trascrivi parola per parola. Solo testo grezzo.",
+    refine: (c:any, r:string) => `Modifica JSON. Contesto: ${JSON.stringify(c)}. Richiesta: "${r}". Output JSON con flowchartData.`
   },
-  fr: {
-    generate: (participants: string[]) => `Vous êtes AIScriba. Transcrivez et résumez. Langue: FRANÇAIS. Flowchart: Étiquettes simples.`,
-    analyzeText: (participants: string[]) => `Analysez ce TEXTE. Résumez et créez un diagramme. Langue: FRANÇAIS.`,
-    transcribeOnly: "Transcrivez l'audio mot à mot. Texte brut uniquement.",
-    refine: (c:any, r:string) => `Modifier JSON. Contexte: ${JSON.stringify(c)}. Demande: "${r}".`
-  },
-  de: {
-    generate: (participants: string[]) => `Du bist AIScriba. Transkribieren und zusammenfassen. Sprache: DEUTSCH. Flowchart: Einfache Labels.`,
-    analyzeText: (participants: string[]) => `Analysiere diesen TEXT. Zusammenfassen und Flussdiagramm. Sprache: DEUTSCH.`,
-    transcribeOnly: "Transkribieren Sie Wort für Wort. Nur Rohtext.",
-    refine: (c:any, r:string) => `JSON bearbeiten. Kontext: ${JSON.stringify(c)}. Anfrage: "${r}".`
-  },
-  es: {
-    generate: (participants: string[]) => `Eres AIScriba. Transcribe y resume. Idioma: ESPAÑOL. Flowchart: Etiquetas simples.`,
-    analyzeText: (participants: string[]) => `Analiza este TEXTO. Resume y crea diagrama. Idioma: ESPAÑOL.`,
-    transcribeOnly: "Transcribe palabra por palabra. Solo texto sin formato.",
-    refine: (c:any, r:string) => `Editar JSON. Contexto: ${JSON.stringify(c)}. Solicitud: "${r}".`
-  },
-  zh: {
-    generate: (participants: string[]) => `你是 AIScriba。转录并总结。语言：中文。流程图：简单标签。`,
-    analyzeText: (participants: string[]) => `分析此文本。总结并创建流程图。语言：中文。`,
-    transcribeOnly: "逐字转录音频。仅纯文本。",
-    refine: (c:any, r:string) => `编辑 JSON。上下文: ${JSON.stringify(c)}. 请求: "${r}".`
-  },
-  ar: {
-    generate: (participants: string[]) => `أنت AIScriba. انسخ ولخص. اللغة: العربية. المخطط الانسيابي: تسميات بسيطة.`,
-    analyzeText: (participants: string[]) => `تحليل هذا النص. تلخيص وإنشاء مخطط انسيابي. اللغة: العربية.`,
-    transcribeOnly: "انسخ الصوت كلمة بكلمة. نص خام فقط.",
-    refine: (c:any, r:string) => `تعديل JSON. السياق: ${JSON.stringify(c)}. الطلب: "${r}".`
-  },
-  pt: {
-    generate: (participants: string[]) => `Você é AIScriba. Transcreva e resuma. Idioma: PORTUGUÊS. Flowchart: Rótulos simples.`,
-    analyzeText: (participants: string[]) => `Analise este TEXTO. Resuma e crie fluxograma. Idioma: PORTUGUÊS.`,
-    transcribeOnly: "Transcreva palavra por palavra. Apenas texto puro.",
-    refine: (c:any, r:string) => `Editar JSON. Contexto: ${JSON.stringify(c)}. Pedido: "${r}".`
-  },
-  el: {
-    generate: (participants: string[]) => `Είσαι AIScriba. Μεταγραφή και σύνοψη. Γλώσσα: ΕΛΛΗΝΙΚΑ. Flowchart: Απλές ετικέτες.`,
-    analyzeText: (participants: string[]) => `Αναλύστε αυτό το ΚΕΙΜΕΝΟ. Σύνοψη και διάγραμμα ροής. Γλώσσα: ΕΛΛΗΝΙΚΑ.`,
-    transcribeOnly: "Μεταγραφή λέξη προς λέξη. Μόνο απλό κείμενο.",
-    refine: (c:any, r:string) => `Επεξεργασία JSON. Πλαίσιο: ${JSON.stringify(c)}. Αίτημα: "${r}".`
-  },
-  hi: {
-    generate: (participants: string[]) => `आप AIScriba हैं. ट्रांसक्राइब और सारांशित करें. भाषा: हिंदी. फ्लोचार्ट: सरल लेबल.`,
-    analyzeText: (participants: string[]) => `इस पाठ का विश्लेषण करें. सारांश और फ्लोचार्ट. भाषा: हिंदी.`,
-    transcribeOnly: "शब्द-दर-शब्द प्रतिलेखन. केवल कच्चा पाठ.",
-    refine: (c:any, r:string) => `JSON संपादित करें. संदर्भ: ${JSON.stringify(c)}. अनुरोध: "${r}".`
-  }
 };
+
+['fr', 'de', 'es', 'zh', 'ar', 'pt', 'el', 'hi'].forEach(lang => {
+    prompts[lang] = prompts['en'];
+});
 
 const getPrompts = (lang: string) => prompts[lang] || prompts['en'];
 
@@ -126,9 +119,65 @@ const fileToGenerativePart = (file: Blob): Promise<{inlineData: { data: string; 
     });
 };
 
-const getAiClient = (apiKey: string) => {
-    if (!apiKey) throw new Error("API Key mancante. Inseriscila nelle Impostazioni.");
-    return new GoogleGenAI({ apiKey });
+const getAiClient = (apiKey: string) => new GoogleGenAI({ apiKey });
+
+// --- HELPERS ---
+
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Increased default retries to 10 to handle 503 Overloaded better
+async function retryOperation<T>(operation: () => Promise<T>, retries = 10, baseDelay = 2000): Promise<T> {
+    let lastError: any;
+    for (let i = 0; i < retries; i++) {
+        try {
+            return await operation();
+        } catch (error: any) {
+            lastError = error;
+            const msg = (error.message || JSON.stringify(error)).toLowerCase();
+            
+            // Retry on 503 (Overloaded) or 429 (Rate Limit)
+            if (msg.includes('503') || msg.includes('overloaded') || msg.includes('429') || msg.includes('resource exhausted')) {
+                const waitTime = baseDelay * Math.pow(1.5, i); // Exponential backoff
+                console.warn(`Gemini API Busy/RateLimited (Attempt ${i+1}/${retries}). Waiting ${Math.round(waitTime/1000)}s...`);
+                await delay(waitTime); 
+                continue;
+            }
+            throw error; 
+        }
+    }
+    throw lastError;
+}
+
+const convertStructuredDataToMermaid = (data: any): string => {
+    if (!data || !data.nodes) return "";
+    
+    let mermaidCode = "graph TD\n";
+    if (Array.isArray(data.nodes)) {
+        data.nodes.forEach((node: any) => {
+            const safeLabel = (node.label || "").replace(/"/g, "'").replace(/[\[\]\{\}]/g, ""); 
+            const safeId = (node.id || "unknown").replace(/[^a-zA-Z0-9]/g, "_"); 
+            if (node.type === 'decision' || safeLabel.includes('?')) {
+                mermaidCode += `  ${safeId}{"${safeLabel}"}\n`;
+            } else {
+                mermaidCode += `  ${safeId}["${safeLabel}"]\n`;
+            }
+        });
+    }
+    if (data.edges && Array.isArray(data.edges)) {
+        data.edges.forEach((edge: any) => {
+            const safeFrom = (edge.fromId || "").replace(/[^a-zA-Z0-9]/g, "_");
+            const safeTo = (edge.toId || "").replace(/[^a-zA-Z0-9]/g, "_");
+            if (safeFrom && safeTo) {
+                if (edge.label) {
+                    const safeEdgeLabel = edge.label.replace(/"/g, "'");
+                    mermaidCode += `  ${safeFrom} -->|"${safeEdgeLabel}"| ${safeTo}\n`;
+                } else {
+                    mermaidCode += `  ${safeFrom} --> ${safeTo}\n`;
+                }
+            }
+        });
+    }
+    return mermaidCode;
 };
 
 // --- CHUNKING LOGIC ---
@@ -139,14 +188,16 @@ async function transcribeChunk(ai: GoogleGenAI, audioBlob: Blob, lang: string): 
     const audioPart = await fileToGenerativePart(audioBlob);
     const p = getPrompts(lang);
     
-    // We use generateContent but specifically ask ONLY for text transcription to keep it fast/cheap
-    const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: { parts: [ { text: p.transcribeOnly || prompts['en'].transcribeOnly }, audioPart ] },
+    return retryOperation(async () => {
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: { parts: [ { text: p.transcribeOnly || prompts['en'].transcribeOnly }, audioPart ] },
+        }) as GenerateContentResponse;
+        return response.text || "";
     });
-    
-    return response.text || "";
 }
+
+const cleanJson = (text: string) => text.replace(/```json/g, '').replace(/```/g, '').trim();
 
 export const generateMinutesFromAudio = async (audioBlob: Blob, participants: string[], language: string, apiKey: string): Promise<Verbal> => {
   const ai = getAiClient(apiKey);
@@ -158,19 +209,32 @@ export const generateMinutesFromAudio = async (audioBlob: Blob, participants: st
       const prompt = p.generate(participants);
       const audioPart = await fileToGenerativePart(audioBlob);
 
-      const response = await ai.models.generateContent({
-          model: "gemini-2.5-flash",
-          contents: { parts: [ { text: prompt }, audioPart ] },
-          config: { responseMimeType: "application/json", responseSchema: verbalSchema },
+      const response = await retryOperation(async () => {
+          const res = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: { parts: [ { text: prompt }, audioPart ] },
+            config: { responseMimeType: "application/json", responseSchema: verbalGenerationSchema },
+          });
+          return res as GenerateContentResponse;
       });
 
-      const jsonText = response.text;
+      const jsonText = cleanJson(response.text || "");
       if (!jsonText) throw new Error("Risposta vuota dall'IA");
-      return JSON.parse(jsonText) as Verbal;
+      
+      const rawData = JSON.parse(jsonText);
+      const mermaidString = convertStructuredDataToMermaid(rawData.flowchartData);
+      
+      return {
+          executiveSummary: rawData.executiveSummary,
+          decisions: rawData.decisions,
+          actionItems: rawData.actionItems,
+          discussionSummary: rawData.discussionSummary,
+          fullTranscript: rawData.fullTranscript || "",
+          flowchart: mermaidString
+      };
   }
 
-  // 2. Chunking strategy for large files
-  console.log("Audio large, using chunking strategy.");
+  // 2. Chunking strategy
   const chunks: Blob[] = [];
   let start = 0;
   while (start < audioBlob.size) {
@@ -179,39 +243,45 @@ export const generateMinutesFromAudio = async (audioBlob: Blob, participants: st
       start = end;
   }
 
-  console.log(`Split into ${chunks.length} chunks.`);
   let fullTranscript = "";
-
   for (let i = 0; i < chunks.length; i++) {
-      console.log(`Transcribing chunk ${i + 1}/${chunks.length}...`);
       try {
+          // Add delay between chunks to avoid 429 Resource Exhausted (RPM limit)
+          if (i > 0) {
+              console.log("Pausing 2s between chunks to respect rate limits...");
+              await delay(2000); 
+          }
+          
           const chunkText = await transcribeChunk(ai, chunks[i], language);
           fullTranscript += chunkText + "\n";
       } catch (e) {
-          console.error(`Error transcribing chunk ${i}`, e);
           fullTranscript += `[Error transcribing part ${i + 1}]\n`;
       }
   }
 
-  console.log("Transcription complete. Generating summary from text...");
-  
-  // Use a specialized text-analysis prompt (no audio payload here)
+  // Final Summary
   const analysisPrompt = p.analyzeText ? p.analyzeText(participants) : prompts['en'].analyzeText(participants);
   
-  const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: { parts: [ { text: analysisPrompt }, { text: fullTranscript } ] },
-      config: { responseMimeType: "application/json", responseSchema: verbalSummarySchema },
+  const response = await retryOperation(async () => {
+      const res = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: { parts: [ { text: analysisPrompt }, { text: fullTranscript } ] },
+        config: { responseMimeType: "application/json", responseSchema: verbalGenerationSchema },
+      });
+      return res as GenerateContentResponse;
   });
 
-  const jsonText = response.text;
-  if (!jsonText) throw new Error("Risposta analisi testo vuota");
-  
-  const summaryData = JSON.parse(jsonText);
-  
+  const jsonText = cleanJson(response.text || "");
+  const rawData = JSON.parse(jsonText);
+  const mermaidString = convertStructuredDataToMermaid(rawData.flowchartData);
+
   return {
-      ...summaryData,
-      fullTranscript: fullTranscript
+      executiveSummary: rawData.executiveSummary,
+      decisions: rawData.decisions,
+      actionItems: rawData.actionItems,
+      discussionSummary: rawData.discussionSummary,
+      fullTranscript: fullTranscript,
+      flowchart: mermaidString
   };
 };
 
@@ -219,28 +289,37 @@ export const refineMinutes = async (currentVerbal: Verbal, refinementPrompt: str
     try {
         const ai = getAiClient(apiKey);
         const { fullTranscript, ...summary } = currentVerbal;
-        const contextSummary = { ...summary };
         
         const promptGenerator = getPrompts(language).refine || prompts['en'].refine;
-        const prompt = promptGenerator(contextSummary, refinementPrompt);
+        const prompt = promptGenerator(summary, refinementPrompt);
 
-        const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: prompt,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: verbalSummarySchema,
-            },
+        const response = await retryOperation(async () => {
+            const res = await ai.models.generateContent({
+                model: "gemini-2.5-flash",
+                contents: prompt,
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: verbalGenerationSchema, 
+                },
+            });
+            return res as GenerateContentResponse;
         });
         
-        const jsonText = response.text;
-        if (!jsonText) throw new Error("Risposta vuota dall'IA");
-        const refinedSummary = JSON.parse(jsonText) as Omit<Verbal, 'fullTranscript'>;
-        return { ...refinedSummary, fullTranscript };
+        const jsonText = cleanJson(response.text || "");
+        const rawData = JSON.parse(jsonText);
+        const mermaidString = convertStructuredDataToMermaid(rawData.flowchartData);
+        
+        return { 
+            executiveSummary: rawData.executiveSummary,
+            decisions: rawData.decisions,
+            actionItems: rawData.actionItems,
+            discussionSummary: rawData.discussionSummary,
+            fullTranscript: fullTranscript,
+            flowchart: mermaidString
+        };
 
     } catch (error: any) {
         console.error("Refinement error:", error);
-         if (error.message.includes("API Key mancante")) throw error;
         throw new Error("Impossibile affinare il verbale.");
     }
 };
@@ -249,26 +328,29 @@ export const generateFlowchartFromText = async (transcript: string, language: st
     try {
         const ai = getAiClient(apiKey);
         const prompt = `
-          You are an expert at creating process flowcharts from meeting transcripts.
-          Analyze the following transcript and generate a Mermaid.js flowchart code that represents the process, decisions, and flow discussed.
-          Use simple labels. Do not use special characters (like quotes or brackets) in node IDs.
-          Return ONLY valid JSON with a single property 'flowchart' containing the Mermaid code string.
-          Target Language: ${language}
+          Extract process flow from text.
+          Return 'nodes' and 'edges' in JSON.
+          Target Language for labels: ${language}
         `;
 
-        const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: { parts: [{ text: prompt }, { text: transcript }] },
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: flowchartSchema,
-            },
+        const response = await retryOperation(async () => {
+            const res = await ai.models.generateContent({
+                model: "gemini-2.5-flash",
+                contents: { parts: [{ text: prompt }, { text: transcript }] },
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: flowchartStructuredSchema, 
+                },
+            });
+            return res as GenerateContentResponse;
         });
 
-        const jsonText = response.text;
+        const jsonText = cleanJson(response.text || "");
         if (!jsonText) throw new Error("Empty response");
+        
         const data = JSON.parse(jsonText);
-        return data.flowchart;
+        return convertStructuredDataToMermaid(data);
+        
     } catch (e: any) {
         console.error("Flowchart generation failed", e);
         if (e.message.includes("API Key")) throw e;

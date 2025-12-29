@@ -1,37 +1,37 @@
 
-# 🔑 Guida alla Google Gemini API Key
+# 🔑 Google Gemini API Key Guide
 
-AIScriba utilizza l'intelligenza artificiale di Google (modello Gemini Flash 2.5) per trascrivere l'audio e generare i verbali. Per funzionare, è necessaria una **API Key**.
+AIScriba uses Google's Artificial Intelligence (Gemini Flash 2.5 model) to transcribe audio and generate meeting minutes. An **API Key** is required for operation.
 
-Google offre attualmente un piano gratuito molto generoso tramite **Google AI Studio**.
-
----
-
-### Come ottenere la chiave (Procedura Gratuita)
-
-1.  Vai su **Google AI Studio**: [https://aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
-2.  Accedi con il tuo account Google (Personale o Workspace).
-3.  Clicca sul pulsante blu **"Create API Key"**.
-4.  Se richiesto, seleziona "Create API key in new project".
-5.  Copia la stringa che appare (inizia solitamente con `AIza...`).
+Google currently offers a very generous free tier via **Google AI Studio**.
 
 ---
 
-### Dove inserirla in AIScriba
+### How to obtain a Key (Free Tier)
 
-Ogni utente può inserire la propria chiave personale, oppure l'Amministratore può configurarne una di default (nel codice, ma la UI supporta l'inserimento per utente).
-
-1.  Fai il login in AIScriba.
-2.  Clicca sull'icona **Ingranaggio (Impostazioni)** in alto a destra nell'header.
-3.  Nel tab "Generale", trova il campo **"La tua Google Gemini API Key"**.
-4.  Incolla la chiave copiata.
-5.  Clicca su **Salva**.
-
-Da questo momento, tutte le nuove registrazioni verranno elaborate usando questa chiave.
+1.  Go to **Google AI Studio**: [https://aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
+2.  Log in with your Google Account (Personal or Workspace).
+3.  Click the blue **"Create API Key"** button.
+4.  If prompted, select "Create API key in new project".
+5.  Copy the string that appears (it usually starts with `AIza...`).
 
 ---
 
-### Nota sui Limiti
+### How to configure it in AIScriba
 
-Il modello utilizzato (`gemini-2.5-flash`) è estremamente economico e veloce. 
-AIScriba ottimizza automaticamente l'audio comprimendolo a **20kbps**, permettendo di inviare registrazioni fino a circa **1 ora** in una singola chiamata API senza superare i limiti di dimensione file di Google.
+Every user can enter their own personal key, or the Administrator can configure a default one (via code, though UI supports per-user keys).
+
+1.  Log in to AIScriba.
+2.  Click the **Gear Icon (Settings)** in the top right header.
+3.  In the "General" tab, find the **"Your Google Gemini API Key"** field.
+4.  Paste your key.
+5.  Click **Save**.
+
+From this moment on, all new recordings will be processed using this key.
+
+---
+
+### Note on Limits
+
+The model used (`gemini-2.5-flash`) is extremely cost-effective and fast.
+AIScriba automatically optimizes audio by compressing it to **20kbps**, allowing you to send recordings of up to approximately **1 hour** in a single API call without exceeding Google's file size limits.

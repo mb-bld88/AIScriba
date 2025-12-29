@@ -1,3 +1,4 @@
+
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
@@ -26,5 +27,22 @@ export default defineConfig({
         secure: false,
       }
     }
-  }
+  },
+  build: {
+    // 1. DISABILITA Source Maps: Impedisce di vedere il codice originale nel browser
+    sourcemap: false,
+    
+    // 2. Minificazione avanzata
+    minify: 'esbuild',
+    
+    // 3. Opzioni per rendere il codice meno leggibile
+    rollupOptions: {
+      output: {
+        // Rimuove commenti e console.log in produzione
+        compact: true,
+      }
+    }
+  },
+  // Nasconde dettagli sensibili nei log
+  logLevel: 'info', 
 })

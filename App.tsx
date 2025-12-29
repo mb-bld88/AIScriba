@@ -142,21 +142,74 @@ const MainApp: React.FC<{
   // BACKGROUND PROCESSING LOGIC
   const processMeetingBackground = async (meeting: Meeting, audioBlob: Blob) => {
       console.log(`Starting background processing for meeting ${meeting.id}`);
+      
+      // Update local state to ensure status is processing
+      setMeetings(prev => prev.map(m => m.id === meeting.id ? { ...m, status: 'processing' } : m));
+
       try {
+          if (!currentUser.googleApiKey) {
+              throw new Error("API Key mancante");
+          }
+
           // 1. Generate Minutes (Heavy Task)
-          const verbal = await generateMinutesFromAudio(audioBlob, meeting.participants, language, currentUser.googleApiKey!);
+          const verbal = await generateMinutesFromAudio(audioBlob, meeting.participants, language, currentUser.googleApiKey);
           
           // 2. Update Meeting with Result
-          const updatedMeeting = { ...meeting, verbal, status: 'processed' as const };
+          const updatedMeeting: Meeting = { ...meeting, verbal, status: 'processed' };
           await saveMeetingToBackend(updatedMeeting);
           
           console.log(`Background processing complete for ${meeting.id}`);
           
           // 3. Refresh List
           await refreshData();
-      } catch (error) {
+      } catch (error: any) {
           console.error(`Background processing failed for ${meeting.id}`, error);
-          // Optionally update status to 'error' if you add that state
+          const failedMeeting: Meeting = { ...meeting, status: 'error' }; 
+          await saveMeetingToBackend(failedMeeting);
+          setMeetings(prev => prev.map(m => m.id === meeting.id ? failedMeeting : m));
+          
+          // INTELLIGENT ERROR HANDLING
+          let msg = "Errore sconosciuto";
+          if (typeof error === 'string') msg = error;
+          else if (error.message) msg = error.message;
+          // Also check for stringified JSON error in the message
+          if (msg.includes('{')) {
+             try {
+                // If the error message is a JSON string, try to parse it to find 'message'
+                // But generally simpler to just check keyword includes
+             } catch(e) {}
+          }
+
+          if (msg.includes('429') || msg.includes('quota') || msg.includes('RESOURCE_EXHAUSTED')) {
+              alert("⚠️ QUOTA GEMINI ESAURITA (Errore 429)\n\nHai raggiunto il limite giornaliero o di velocità del piano gratuito di Google.\n\nSOLUZIONE:\n1. Attendi qualche minuto e riprova.\n2. Oppure vai su Impostazioni e cambia la Chiave API.");
+          } else if (msg.includes('503') || msg.includes('overloaded')) {
+              alert("⚠️ SERVER GOOGLE SOVRACCARICHI (Errore 503)\n\nI server AI sono momentaneamente pieni. L'app ha già riprovato più volte senza successo. Riprova più tardi cliccando sul pulsante 'Riprova' nella riunione.");
+          } else {
+              alert(`Errore elaborazione: ${msg}`);
+          }
+      }
+  };
+
+  const handleRetryProcessing = async (meeting: Meeting) => {
+      if (!meeting.audioUrl) {
+          alert("Impossibile riprovare: File audio mancante.");
+          return;
+      }
+
+      // Optimistic update to UI
+      setMeetings(prev => prev.map(m => m.id === meeting.id ? { ...m, status: 'processing' } : m));
+
+      try {
+          // Convert stored Data URL/Blob URL back to Blob
+          const response = await fetch(meeting.audioUrl);
+          const blob = await response.blob();
+          
+          // Restart processing
+          await processMeetingBackground(meeting, blob);
+      } catch (e) {
+          console.error("Failed to retrieve audio blob for retry", e);
+          alert("Errore nel recupero del file audio. Impossibile riprovare.");
+          setMeetings(prev => prev.map(m => m.id === meeting.id ? { ...m, status: 'error' } : m));
       }
   };
 
@@ -270,6 +323,7 @@ const MainApp: React.FC<{
                     company={company || {id:'local', name:'Local', logoUrl:null}} 
                     currentUser={currentUser}
                     onDelete={handleDeleteMeeting}
+                    onRetry={handleRetryProcessing}
                   />
                 ) : (
                   <WelcomeScreen onNewMeeting={() => setView('newMeeting')} />
