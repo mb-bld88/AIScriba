@@ -17,7 +17,6 @@ interface MeetingDetailsProps {
     onRetry?: (meeting: Meeting) => void;
 }
 
-// Editable Section Component
 const EditableSection: React.FC<{ 
     title: string; 
     icon: string; 
@@ -69,11 +68,11 @@ export const MeetingDetails: React.FC<MeetingDetailsProps> = ({ meeting, onUpdat
     const [refinementPrompt, setRefinementPrompt] = useState('');
     const [isRefining, setIsRefining] = useState(false);
     const [isGeneratingFlowchart, setIsGeneratingFlowchart] = useState(false);
-    const [flowchartError, setFlowchartError] = useState(false); // New state for error handling
+    const [flowchartError, setFlowchartError] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const { t, language } = useLanguage();
+    const mermaidRef = useRef<HTMLDivElement>(null);
     
-    // PDF Print Options
     const [showPdfOptions, setShowPdfOptions] = useState(false);
     const [printConfig, setPrintConfig] = useState({
         executiveSummary: true,
@@ -84,12 +83,9 @@ export const MeetingDetails: React.FC<MeetingDetailsProps> = ({ meeting, onUpdat
         fullTranscript: true
     });
     const pdfMenuRef = useRef<HTMLDivElement>(null);
-    
-    // Share State
     const [showShareModal, setShowShareModal] = useState(false);
     const [shareEmail, setShareEmail] = useState('');
 
-    // Click outside to close PDF menu
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
             if (pdfMenuRef.current && !pdfMenuRef.current.contains(event.target as Node)) {
@@ -100,63 +96,65 @@ export const MeetingDetails: React.FC<MeetingDetailsProps> = ({ meeting, onUpdat
         return () => document.removeEventListener("mousedown", handleClickOutside);
     }, []);
 
-    // Reset error when meeting changes
+    // Reset flowchart state when ID changes
     useEffect(() => {
         setFlowchartError(false);
-    }, [meeting.id, meeting.verbal?.flowchart]);
+        setIsGeneratingFlowchart(false);
+    }, [meeting.id]);
 
+    // Mermaid Rendering Logic
     useEffect(() => {
-        if (meeting.verbal?.flowchart && !flowchartError) {
-            const mermaidChartId = `mermaid-chart-${meeting.id}`;
-            const element = document.getElementById(mermaidChartId);
-
-            if (element) {
-                // Clear previous content
-                element.innerHTML = `<div class="flex justify-center items-center min-h-[100px]"><div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div></div>`;
+        if (meeting.verbal?.flowchart && !flowchartError && mermaidRef.current) {
+            const renderChart = async () => {
+                const container = mermaidRef.current;
+                if (!container) return;
                 
-                const isDarkMode = document.documentElement.classList.contains('dark');
-                let code = meeting.verbal.flowchart;
+                // Set initial loading state inside container
+                container.innerHTML = `<div class="p-4 flex justify-center"><i class="fa-solid fa-circle-notch fa-spin text-blue-500"></i></div>`;
                 
-                // Minimal Sanitization (The heavy lifting is now done by the backend structure)
-                // Just ensuring graph TD exists if missing
-                if (!code.includes('graph TD') && !code.includes('graph LR')) {
-                     code = 'graph TD\n' + code;
-                }
-
                 try {
+                    const isDarkMode = document.documentElement.classList.contains('dark');
                     mermaid.initialize({ 
                         startOnLoad: false, 
-                        theme: isDarkMode ? 'dark' : 'default', 
-                        securityLevel: 'loose',
-                        fontFamily: 'inherit'
+                        theme: isDarkMode ? 'dark' : 'default',
+                        securityLevel: 'loose'
                     });
+
+                    const code = meeting.verbal!.flowchart!;
                     
-                    mermaid.render(`mermaid-svg-${meeting.id}`, code)
-                        .then(({ svg }: { svg: string }) => { 
-                            if (element) element.innerHTML = svg; 
-                        })
-                        .catch((e: any) => {
-                            console.error("Mermaid Render Error:", e);
-                            setFlowchartError(true); // Trigger UI switch to regeneration button
-                        });
-                } catch(e: any) { 
-                     console.error("Mermaid Init Error:", e);
-                     setFlowchartError(true);
+                    // Validate syntax first to avoid crash
+                    try {
+                        await mermaid.parse(code);
+                    } catch (syntaxErr) {
+                        console.error("Syntax Error in Mermaid:", syntaxErr);
+                        setFlowchartError(true);
+                        container.innerHTML = "";
+                        return;
+                    }
+
+                    const { svg } = await mermaid.render(`svg-${meeting.id}`, code);
+                    if (container) container.innerHTML = svg;
+                } catch (e) {
+                    console.error("Mermaid final render fail:", e);
+                    setFlowchartError(true);
+                    if (container) container.innerHTML = "";
                 }
-            }
+            };
+            
+            renderChart();
         }
     }, [meeting.verbal?.flowchart, meeting.id, flowchartError]);
 
     const handleGenerateFlowchart = async () => {
         if (!meeting.verbal) return;
         setIsGeneratingFlowchart(true);
-        setFlowchartError(false); // Reset error state while generating
+        setFlowchartError(false);
         try {
             const flowchartCode = await generateFlowchartFromText(meeting.verbal.fullTranscript, language, currentUser.googleApiKey || '');
             const updatedVerbal = { ...meeting.verbal, flowchart: flowchartCode };
             onUpdateVerbal(meeting.id, updatedVerbal);
         } catch (e) {
-            alert("Impossibile generare il grafico.");
+            setFlowchartError(true);
         } finally {
             setIsGeneratingFlowchart(false);
         }
@@ -174,63 +172,21 @@ export const MeetingDetails: React.FC<MeetingDetailsProps> = ({ meeting, onUpdat
         if (!meeting.verbal) return;
         try {
             const zip = new JSZip();
-            
             if (meeting.audioUrl) {
-                let audioBlob: Blob;
-                let extension = 'webm';
-
-                if (meeting.audioUrl.startsWith('data:')) {
-                    const fetchRes = await fetch(meeting.audioUrl);
-                    audioBlob = await fetchRes.blob();
-                    const type = meeting.audioUrl.split(';')[0].split(':')[1];
-                    if (type.includes('mp4')) extension = 'mp4';
-                    else if (type.includes('mpeg')) extension = 'mp3';
-                    else if (type.includes('wav')) extension = 'wav';
-                } else {
-                    const audioResponse = await fetch(meeting.audioUrl);
-                    if (!audioResponse.ok) throw new Error("Audio file not accessible");
-                    audioBlob = await audioResponse.blob();
-                }
-                zip.file(`recording.${extension}`, audioBlob);
+                const response = await fetch(meeting.audioUrl);
+                const blob = await response.blob();
+                zip.file(`audio_recording.webm`, blob);
             }
-
-            const { verbal } = meeting;
-            const mdContent = `
-# ${meeting.title}
-Date: ${meeting.date}
-Participants: ${meeting.participants.join(', ')}
-
-## Executive Summary
-${verbal.executiveSummary}
-
-## Decisions
-${verbal.decisions.map(d => `- ${d.decision}`).join('\n')}
-
-## Action Items
-${verbal.actionItems.map(a => `- [ ] ${a.task} (@${a.owner}) due: ${a.dueDate}`).join('\n')}
-
-## Discussion Summary
-${verbal.discussionSummary}
-
-## Full Transcript
-${verbal.fullTranscript}
-            `.trim();
-
+            const mdContent = `# ${meeting.title}\nDate: ${meeting.date}\n\n${meeting.verbal.executiveSummary}`;
             zip.file('minutes.md', mdContent);
-
             const zipBlob = await zip.generateAsync({ type: 'blob' });
             const url = URL.createObjectURL(zipBlob);
             const a = document.createElement('a');
             a.href = url;
             a.download = `${meeting.title.replace(/\s/g, '_')}_archive.zip`;
-            document.body.appendChild(a);
             a.click();
-            document.body.removeChild(a);
             URL.revokeObjectURL(url);
-        } catch (err) {
-            console.error("Error creating zip file:", err);
-            alert("Impossibile creare il file ZIP.");
-        }
+        } catch (err) { alert("Errore creazione ZIP"); }
     };
 
     const handleRefinement = async () => {
@@ -241,17 +197,12 @@ ${verbal.fullTranscript}
             const updatedVerbal = await refineMinutes(meeting.verbal, refinementPrompt, language, currentUser.googleApiKey || '');
             onUpdateVerbal(meeting.id, updatedVerbal);
             setRefinementPrompt('');
-        } catch (err: any) {
-            setError(err.message || t('unexpectedError'));
-        } finally {
-            setIsRefining(false);
-        }
+        } catch (err: any) { setError(err.message || "Errore raffinamento"); } finally { setIsRefining(false); }
     };
 
     const handleDelete = async () => {
-        if (confirm("Sei sicuro di voler eliminare questa riunione?")) {
-            try { await deleteMeeting(meeting.id); onDelete(meeting.id); } 
-            catch (e) { alert("Errore eliminazione."); }
+        if (confirm("Eliminare questa riunione?")) {
+            try { await deleteMeeting(meeting.id); onDelete(meeting.id); } catch (e) { alert("Errore"); }
         }
     };
 
@@ -259,109 +210,31 @@ ${verbal.fullTranscript}
         if (!shareEmail.trim()) return;
         try {
             await shareMeeting(meeting.id, shareEmail.trim());
-            alert(`Riunione condivisa con successo con ${shareEmail}!`);
+            alert("Condiviso!");
             setShowShareModal(false);
             setShareEmail('');
-        } catch (e) {
-            alert("Impossibile condividere: Utente non trovato o errore server.");
-        }
+        } catch (e) { alert("Errore condivisione"); }
     }
 
     if (meeting.status === 'error') {
         return (
-            <div className="flex flex-col items-center justify-center h-full text-center p-8 bg-red-50 dark:bg-red-900/10 rounded-lg border-2 border-red-100 dark:border-red-900">
-                <div className="w-24 h-24 bg-red-100 dark:bg-red-900/30 rounded-full flex items-center justify-center mb-6">
-                    <i className="fa-solid fa-triangle-exclamation text-4xl text-red-500"></i>
-                </div>
-                <h2 className="text-2xl font-bold text-red-700 dark:text-red-400">
-                    Elaborazione Fallita
-                </h2>
-                <p className="text-slate-600 dark:text-slate-300 mb-6 max-w-md">
-                    Si è verificato un errore durante l'elaborazione dell'audio. Spesso questo accade perché si è raggiunta la <strong>Quota Giornaliera</strong> o i server Google sono intasati.
-                </p>
-                <div className="flex space-x-4">
-                     {meeting.audioUrl && (
-                        <a 
-                            href={meeting.audioUrl} 
-                            download={`backup-${meeting.title}.webm`}
-                            className="px-6 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg font-bold flex items-center"
-                        >
-                            <i className="fa-solid fa-download mr-2"></i> Scarica Audio
-                        </a>
-                    )}
-                    {onRetry && (
-                        <button onClick={() => onRetry(meeting)} className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg flex items-center">
-                            <i className="fa-solid fa-rotate-right mr-2"></i> Riprova
-                        </button>
-                    )}
-                    <button onClick={handleDelete} className="px-6 py-2 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg font-bold">
-                        Elimina
-                    </button>
+            <div className="flex flex-col items-center justify-center h-full p-8 text-center bg-red-50 dark:bg-red-900/10 rounded-lg">
+                <i className="fa-solid fa-triangle-exclamation text-4xl text-red-500 mb-4"></i>
+                <h2 className="text-2xl font-bold text-red-700">Elaborazione Fallita</h2>
+                <div className="mt-6 flex space-x-4">
+                    {onRetry && <button onClick={() => onRetry(meeting)} className="bg-blue-600 text-white px-6 py-2 rounded-lg font-bold">Riprova</button>}
+                    <button onClick={handleDelete} className="bg-slate-200 text-slate-700 px-6 py-2 rounded-lg font-bold">Elimina</button>
                 </div>
             </div>
         );
     }
 
     if (meeting.status === 'processing' || meeting.status === 'pending') {
-        let isStuck = false;
-        try {
-            const timestamp = parseInt(meeting.id.split('-')[1]);
-            const elapsed = Date.now() - timestamp;
-            if (elapsed > 5 * 60 * 1000) { 
-                isStuck = true;
-            }
-        } catch(e) {}
-
         return (
-            <div className="flex flex-col items-center justify-center h-full text-center p-8 bg-white dark:bg-slate-800 rounded-lg">
-                <div className="relative mb-6">
-                    <Spinner className="h-16 w-16 border-b-4 border-blue-500" />
-                    {isStuck && (
-                        <div className="absolute -top-1 -right-1 bg-amber-500 rounded-full w-6 h-6 flex items-center justify-center text-white text-xs font-bold animate-ping">
-                            !
-                        </div>
-                    )}
-                </div>
-                
-                <h3 className="text-xl font-bold mb-2">{t('processing')}...</h3>
-                <p className="text-slate-500 max-w-md mb-8">
-                    {t('processingMessage')}
-                </p>
-
-                {isStuck && (
-                    <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-4 rounded-lg mb-6 max-w-md">
-                        <p className="text-amber-800 dark:text-amber-200 font-semibold mb-2">
-                            <i className="fa-solid fa-clock mr-2"></i> Sembra che ci stia mettendo un po' troppo...
-                        </p>
-                        <p className="text-sm text-amber-700 dark:text-amber-300 mb-4">
-                            Se hai ricaricato la pagina o chiuso il browser durante l'elaborazione, il processo potrebbe essersi interrotto.
-                        </p>
-                        {onRetry && (
-                            <button 
-                                onClick={() => onRetry(meeting)}
-                                className="bg-amber-600 hover:bg-amber-700 text-white font-bold py-2 px-4 rounded-lg w-full transition-colors"
-                            >
-                                <i className="fa-solid fa-rotate-right mr-2"></i> Riprova Sintesi
-                            </button>
-                        )}
-                    </div>
-                )}
-
-                <div className="flex space-x-4">
-                    {meeting.audioUrl && (
-                        <a 
-                            href={meeting.audioUrl} 
-                            download={`backup-${meeting.title}.webm`}
-                            className="text-blue-600 hover:text-blue-800 dark:text-blue-400 font-semibold text-sm flex items-center bg-blue-50 dark:bg-blue-900/30 px-4 py-2 rounded-lg"
-                        >
-                            <i className="fa-solid fa-download mr-2"></i> Salvataggio Audio (Safety Net)
-                        </a>
-                    )}
-                    
-                    <button onClick={handleDelete} className="text-red-500 hover:text-red-700 text-sm font-semibold hover:underline px-4 py-2">
-                        <i className="fa-solid fa-trash-can mr-1"></i> Annulla ed Elimina
-                    </button>
-                </div>
+            <div className="flex flex-col items-center justify-center h-full p-8 text-center">
+                <Spinner className="h-16 w-16 border-b-4 border-blue-500 mb-6" />
+                <h3 className="text-xl font-bold">{t('processing')}...</h3>
+                <p className="text-slate-500 mt-2">{t('processingMessage')}</p>
             </div>
         );
     }
@@ -371,231 +244,83 @@ ${verbal.fullTranscript}
 
     return (
         <div className="print:bg-white print:text-black print:p-8">
-            <div className="flex justify-between items-center mb-6 no-print relative">
+            <div className="flex justify-between items-center mb-6 no-print">
                 <div>
                     <h2 className="text-3xl font-extrabold text-slate-900 dark:text-white">{meeting.title}</h2>
-                    <p className="text-slate-500 dark:text-slate-400">{meeting.date}</p>
-                    {meeting.sharedWith && meeting.sharedWith.length > 0 && (
-                        <p className="text-xs text-purple-600 dark:text-purple-400 mt-1">
-                            <i className="fa-solid fa-users mr-1"></i> 
-                            Condiviso con: {meeting.sharedWith.map(u => u.email).join(', ')}
-                        </p>
-                    )}
+                    <p className="text-slate-500">{meeting.date}</p>
                 </div>
                 <div className="flex items-center space-x-2">
-                     <button onClick={handleDelete} className="bg-red-100 hover:bg-red-200 text-red-700 p-2 rounded-lg" title="Elimina Riunione"><i className="fa-solid fa-trash-can"></i></button>
-                     
-                     {/* RESTORED ZIP BUTTON */}
-                     <button 
-                        onClick={handleExportZip}
-                        className="bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-200 font-bold py-2 px-4 rounded-lg transition-colors flex items-center"
-                        title="Scarica ZIP con Audio e Verbale"
-                     >
-                        <i className="fa-solid fa-file-zipper mr-2"></i> ZIP
-                     </button>
-
-                     <button 
-                        onClick={() => setShowShareModal(true)}
-                        className="flex items-center bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-200 font-bold py-2 px-4 rounded-lg transition-colors"
-                     >
-                        <i className="fa-solid fa-share-nodes mr-2"></i>
-                        {t('share')}
-                     </button>
-
-                     <div className="relative" ref={pdfMenuRef}>
-                        <button 
-                            onClick={() => setShowPdfOptions(!showPdfOptions)}
-                            className="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-lg flex items-center"
-                        >
-                            <i className="fa-solid fa-file-pdf mr-2"></i> {t('exportPdf')} <i className="fa-solid fa-chevron-down ml-2 text-xs"></i>
-                        </button>
-                        {showPdfOptions && (
-                            <div className="absolute right-0 mt-2 w-56 bg-white dark:bg-slate-800 rounded-lg shadow-xl border border-slate-200 dark:border-slate-700 z-50 p-4">
-                                <h4 className="font-bold mb-2 text-sm text-slate-500">Opzioni Stampa PDF</h4>
-                                <div className="space-y-2">
-                                    {Object.keys(printConfig).map((key) => (
-                                        <label key={key} className="flex items-center space-x-2 cursor-pointer">
-                                            <input 
-                                                type="checkbox" 
-                                                checked={printConfig[key as keyof typeof printConfig]} 
-                                                onChange={(e) => setPrintConfig({...printConfig, [key]: e.target.checked})}
-                                                className="rounded text-blue-600 focus:ring-blue-500"
-                                            />
-                                            <span className="text-sm capitalize">{key.replace(/([A-Z])/g, ' $1').trim()}</span>
-                                        </label>
-                                    ))}
-                                </div>
-                                <button onClick={handleExportPdf} className="w-full mt-4 bg-blue-600 text-white py-2 rounded text-sm font-bold">Stampa Ora</button>
-                            </div>
-                        )}
-                     </div>
+                     <button onClick={handleDelete} className="bg-red-100 text-red-700 p-2 rounded-lg"><i className="fa-solid fa-trash-can"></i></button>
+                     <button onClick={handleExportZip} className="bg-slate-200 text-slate-800 font-bold py-2 px-4 rounded-lg">ZIP</button>
+                     <button onClick={() => setShowShareModal(true)} className="bg-slate-200 text-slate-800 font-bold py-2 px-4 rounded-lg"><i className="fa-solid fa-share-nodes"></i></button>
+                     <button onClick={handleExportPdf} className="bg-red-500 text-white font-bold py-2 px-4 rounded-lg"><i className="fa-solid fa-file-pdf mr-2"></i> PDF</button>
                 </div>
-            </div>
-            
-            {/* Share Modal */}
-            {showShareModal && (
-                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-                    <div className="bg-white dark:bg-slate-800 rounded-lg shadow-xl p-6 w-full max-w-md animate-in fade-in zoom-in-95 duration-200">
-                        <h3 className="text-xl font-bold mb-4">Condividi Riunione</h3>
-                        <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">
-                            Inserisci l'email di un collega per condividere questa riunione (deve essere già registrato).
-                        </p>
-                        <input 
-                            type="email" 
-                            value={shareEmail}
-                            onChange={e => setShareEmail(e.target.value)}
-                            placeholder="collega@azienda.com"
-                            className="w-full p-3 border rounded-lg dark:bg-slate-700 dark:border-slate-600 mb-4"
-                            autoFocus
-                        />
-                        <div className="flex justify-end space-x-3">
-                            <button onClick={() => setShowShareModal(false)} className="px-4 py-2 text-slate-600 dark:text-slate-300">Annulla</button>
-                            <button onClick={handleShare} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Condividi</button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Print Header */}
-            <div className="hidden print:block text-center mb-12">
-                 {company.logoUrl && <img src={company.logoUrl} alt="Logo" className="h-16 w-auto object-contain mx-auto mb-4" />}
-                 <h1 className="text-3xl font-bold">{company.name}</h1>
-                 <h2 className="text-xl mb-1">{meeting.title}</h2>
-                 <p className="text-gray-500 text-sm">{meeting.date} &bull; {t('participants')}: {meeting.participants.join(', ')}</p>
-                 <p className="text-xs text-gray-400 mt-2">Trascrizione generata da AI. Verificare con l'audio originale.</p>
-                 <hr className="mt-4 border-gray-300"/>
             </div>
 
             {meeting.audioUrl && (
-                <div className="no-print mb-6">
-                    <div className="bg-white dark:bg-slate-800/50 rounded-xl shadow-sm p-4">
-                        <h4 className="font-bold mb-2"><i className="fa-solid fa-headphones mr-2"></i> Audio</h4>
-                        <audio controls src={meeting.audioUrl} className="w-full rounded-lg"></audio>
-                    </div>
+                <div className="no-print mb-6 bg-white dark:bg-slate-800/50 p-4 rounded-xl shadow-sm">
+                    <audio controls src={meeting.audioUrl} className="w-full"></audio>
                 </div>
             )}
 
-            <div id={`pdf-content-${meeting.id}`}>
-                <EditableSection 
-                    title={t('executiveSummary')} 
-                    icon="fa-rocket" 
-                    content={verbal.executiveSummary} 
-                    onSave={(val) => handleUpdateSection('executiveSummary', val)} 
-                    isVisibleInPrint={printConfig.executiveSummary}
-                />
+            <EditableSection title={t('executiveSummary')} icon="fa-rocket" content={verbal.executiveSummary} onSave={(val) => handleUpdateSection('executiveSummary', val)} isVisibleInPrint={printConfig.executiveSummary} />
 
-                <div className={`bg-white dark:bg-slate-800/50 rounded-xl shadow-sm p-6 mb-6 print:shadow-none print:break-inside-avoid ${!printConfig.decisions ? 'print:hidden' : ''}`}>
-                    <div className="flex items-center mb-4 border-b print:border-black pb-2">
-                        <i className="fa-solid fa-gavel text-xl text-blue-500 mr-4 print:hidden"></i>
-                        <h3 className="text-xl font-bold uppercase w-full">{t('decisions')}</h3>
-                    </div>
-                    <ul className="list-disc pl-5">
-                        {verbal.decisions.map((d, i) => <li key={i} className="mb-2">{d.decision}</li>)}
-                    </ul>
-                </div>
-
-                <div className={`bg-white dark:bg-slate-800/50 rounded-xl shadow-sm p-6 mb-6 print:shadow-none print:break-inside-avoid ${!printConfig.actionItems ? 'print:hidden' : ''}`}>
-                    <div className="flex items-center mb-4 border-b print:border-black pb-2">
-                        <i className="fa-solid fa-list-check text-xl text-blue-500 mr-4 print:hidden"></i>
-                        <h3 className="text-xl font-bold uppercase w-full">{t('actionItems')}</h3>
-                    </div>
-                    <table className="w-full text-left border-collapse">
-                        <thead>
-                            <tr>
-                                <th className="pb-2 font-semibold">{t('task')}</th>
-                                <th className="pb-2 font-semibold">{t('owner')}</th>
-                                <th className="pb-2 font-semibold">{t('dueDate')}</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {verbal.actionItems.map((item, i) => (
-                                <tr key={i} className="border-b dark:border-slate-700 print:border-gray-200">
-                                    <td className="py-2 pr-2">{item.task}</td>
-                                    <td className="py-2 pr-2"><span className="bg-blue-100 text-blue-800 text-xs font-medium px-2 py-0.5 rounded-full print:border print:bg-transparent">{item.owner}</span></td>
-                                    <td className="py-2 text-sm">{item.dueDate}</td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-
-                <div className={`bg-white dark:bg-slate-800/50 rounded-xl shadow-sm p-6 mb-6 print:shadow-none print:break-inside-avoid ${!printConfig.flowchart ? 'print:hidden' : ''}`}>
-                    <div className="flex items-center justify-between mb-4 border-b print:border-black pb-2">
-                        <div className="flex items-center">
-                            <i className="fa-solid fa-sitemap text-xl text-blue-500 mr-4 print:hidden"></i>
-                            <h3 className="text-xl font-bold uppercase">{t('flowchart')}</h3>
-                        </div>
-                    </div>
-                    
-                    {/* Flowchart Logic: Either Show Chart, Error/Regenerate UI, or Initial Generate UI */}
-                    {verbal.flowchart && !flowchartError ? (
-                        <div id={`mermaid-chart-${meeting.id}`} className="flex justify-center items-center"></div>
-                    ) : (
-                        <div className="text-center py-8 no-print bg-slate-50 dark:bg-slate-900/50 rounded-lg">
-                            {flowchartError && (
-                                <div className="mb-4 text-red-500 flex flex-col items-center">
-                                    <i className="fa-solid fa-triangle-exclamation text-2xl mb-2"></i>
-                                    <p className="font-semibold">Il grafico salvato non è valido.</p>
-                                    <p className="text-xs text-slate-500">I dati generati in precedenza non sono compatibili. Puoi rigenerarlo ora.</p>
-                                </div>
-                            )}
-                            <p className="text-slate-500 mb-4">{!flowchartError ? "Nessun grafico generato." : ""}</p>
-                            <button onClick={handleGenerateFlowchart} disabled={isGeneratingFlowchart} className="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700 disabled:opacity-50 font-bold shadow-md transition-all hover:scale-105">
-                                {isGeneratingFlowchart ? <span className="flex items-center"><Spinner className="mr-2 h-4 w-4 border-white"/> Rigenerazione in corso...</span> : "Genera / Ripara Diagramma"}
-                            </button>
-                        </div>
-                    )}
-                </div>
-
-                <EditableSection 
-                    title={t('discussionSummary')} 
-                    icon="fa-comments" 
-                    content={verbal.discussionSummary} 
-                    onSave={(val) => handleUpdateSection('discussionSummary', val)}
-                    isVisibleInPrint={printConfig.discussionSummary}
-                />
-
-                 <div className={`bg-white dark:bg-slate-800/50 rounded-xl shadow-sm mb-6 print:shadow-none print:border-none ${!printConfig.fullTranscript ? 'print:hidden' : ''}`}>
-                    <details open className="print:block">
-                        <summary className="cursor-pointer p-6 flex items-center print:hidden">
-                            <i className={`fa-solid fa-file-lines text-xl text-blue-500 mr-4`}></i>
-                            <h3 className="text-xl font-bold text-slate-800 dark:text-slate-100">{t('fullConversation')}</h3>
-                        </summary>
-                        <div className="hidden print:flex items-center mb-4 border-b print:border-black pb-2">
-                             <h3 className="text-xl font-bold uppercase w-full">{t('fullConversation')}</h3>
-                        </div>
-                        <div className="p-6 pt-0 print:p-0">
-                             <div className="prose prose-slate dark:prose-invert max-w-none bg-slate-100 dark:bg-slate-900/50 print:bg-white p-4 rounded-lg print:p-0">
-                                <p className="whitespace-pre-wrap font-mono text-sm">{verbal.fullTranscript}</p>
-                             </div>
-                        </div>
-                    </details>
-                </div>
+            <div className={`bg-white dark:bg-slate-800/50 rounded-xl shadow-sm p-6 mb-6 ${!printConfig.decisions ? 'print:hidden' : ''}`}>
+                <h3 className="text-xl font-bold uppercase mb-4 border-b pb-2">{t('decisions')}</h3>
+                <ul className="list-disc pl-5">{verbal.decisions.map((d, i) => <li key={i} className="mb-2">{d.decision}</li>)}</ul>
             </div>
-            
-            <div className="mt-8 no-print">
-                <h3 className="text-xl font-bold mb-3 flex items-center"><i className="fa-solid fa-wand-magic-sparkles text-purple-500 mr-3"></i>{t('aiRefinement')}</h3>
-                <div className="bg-white dark:bg-slate-800 rounded-lg p-4 shadow-sm">
-                    <textarea
-                        value={refinementPrompt}
-                        onChange={(e) => setRefinementPrompt(e.target.value)}
-                        placeholder={t('refinementPlaceholder')}
-                        className="w-full p-2 border border-slate-300 dark:border-slate-600 rounded-md bg-slate-50 dark:bg-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
-                        rows={3}
-                        disabled={isRefining}
-                    />
-                    <div className="flex justify-end items-center mt-3">
-                         {error && <p className="text-sm text-red-500 mr-4">{error}</p>}
-                        <button
-                            onClick={handleRefinement}
-                            className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-5 rounded-lg flex items-center transition-colors disabled:bg-purple-400 disabled:cursor-not-allowed"
-                            disabled={isRefining || !refinementPrompt.trim()}
-                        >
-                            {isRefining ? <Spinner /> : <><i className="fa-solid fa-paper-plane mr-2"></i> {t('refine')}</>}
+
+            <div className={`bg-white dark:bg-slate-800/50 rounded-xl shadow-sm p-6 mb-6 ${!printConfig.actionItems ? 'print:hidden' : ''}`}>
+                <h3 className="text-xl font-bold uppercase mb-4 border-b pb-2">{t('actionItems')}</h3>
+                <table className="w-full text-left">
+                    <thead><tr><th className="pb-2">{t('task')}</th><th className="pb-2">{t('owner')}</th><th className="pb-2">{t('dueDate')}</th></tr></thead>
+                    <tbody>
+                        {verbal.actionItems.map((item, i) => (
+                            <tr key={i} className="border-b dark:border-slate-700">
+                                <td className="py-2">{item.task}</td><td className="py-2">{item.owner}</td><td className="py-2">{item.dueDate}</td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+
+            <div className={`bg-white dark:bg-slate-800/50 rounded-xl shadow-sm p-6 mb-6 ${!printConfig.flowchart ? 'print:hidden' : ''}`}>
+                <h3 className="text-xl font-bold uppercase mb-4 border-b pb-2">{t('flowchart')}</h3>
+                <div ref={mermaidRef} className="flex justify-center overflow-x-auto min-h-[50px]"></div>
+                {flowchartError && (
+                    <div className="text-center py-4 bg-slate-50 dark:bg-slate-900/30 rounded-lg no-print">
+                        <p className="text-red-500 mb-2 font-semibold">Diagramma non disponibile o non valido.</p>
+                        <button onClick={handleGenerateFlowchart} disabled={isGeneratingFlowchart} className="bg-blue-600 text-white px-4 py-2 rounded font-bold">
+                            {isGeneratingFlowchart ? "Rigenerazione..." : "Ripara Diagramma"}
                         </button>
                     </div>
+                )}
+            </div>
+
+            <EditableSection title={t('discussionSummary')} icon="fa-comments" content={verbal.discussionSummary} onSave={(val) => handleUpdateSection('discussionSummary', val)} isVisibleInPrint={printConfig.discussionSummary} />
+
+            <div className="no-print mt-8 bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm">
+                <h3 className="text-xl font-bold mb-3 flex items-center"><i className="fa-solid fa-wand-magic-sparkles text-purple-500 mr-3"></i>{t('aiRefinement')}</h3>
+                <textarea value={refinementPrompt} onChange={(e) => setRefinementPrompt(e.target.value)} placeholder={t('refinementPlaceholder')} className="w-full p-3 border rounded-md dark:bg-slate-700" rows={3} disabled={isRefining} />
+                <div className="flex justify-end mt-3">
+                    <button onClick={handleRefinement} disabled={isRefining || !refinementPrompt.trim()} className="bg-purple-600 text-white px-6 py-2 rounded-lg font-bold">
+                        {isRefining ? <Spinner /> : t('refine')}
+                    </button>
                 </div>
             </div>
+
+            {showShareModal && (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+                    <div className="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-xl w-full max-w-md">
+                        <h3 className="text-xl font-bold mb-4">Condividi</h3>
+                        <input type="email" value={shareEmail} onChange={e => setShareEmail(e.target.value)} placeholder="Email collega" className="w-full p-2 border rounded mb-4 dark:bg-slate-700" />
+                        <div className="flex justify-end space-x-2">
+                            <button onClick={() => setShowShareModal(false)} className="px-4 py-2">Annulla</button>
+                            <button onClick={handleShare} className="bg-blue-600 text-white px-4 py-2 rounded">Invia</button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
